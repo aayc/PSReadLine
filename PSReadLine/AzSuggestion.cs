@@ -12,7 +12,7 @@ namespace Microsoft.PowerShell
     public partial class PSConsoleReadLine
     {
         const char commandSplitTokens = '|';
-        const string serviceUri = "http://localhost:3000/azpredict"; // TODO use real service URI
+        const string serviceUri = "http://localhost:3000/prediction"; // TODO use real service URI
         HttpClient client = new HttpClient();
         List<string> suggestions = new List<string>();
         List<string> commands = new List<string>();
@@ -129,7 +129,16 @@ namespace Microsoft.PowerShell
             waitForPredictions = true;
             suggestions.Clear();
             string historySnippet = ProcessHistory();
-            string requestBody = JsonConvert.SerializeObject(new Dictionary<string, string> { { "history", historySnippet } });
+            string requestBody = JsonConvert.SerializeObject(new Dictionary<string, dynamic> {
+                { "history", historySnippet },
+                { "clientType", "AzurePowerShell" },
+                { "context", new Dictionary<string, string>{
+                    { "CorrelationId", "00000000-0000-0000-0000-000000000000" },
+                    { "SessionId", "00000000-0000-0000-0000-000000000000" },
+                    { "SubscriptionId", "00000000-0000-0000-0000-000000000000" },
+                    { "VersionNumber", "1.0" }
+                }}
+            });
             client
                 .PostAsync(serviceUri, new StringContent(requestBody, Encoding.UTF8, "application/json"))
                 .ContinueWith(async (requestTask) => {
@@ -187,7 +196,7 @@ namespace Microsoft.PowerShell
 
             if (logs.Count % 10 == 0)
             {
-                Debug.WriteLine("TODO: write logs");
+                Debug.WriteLine("TODO: aggregate and write logs");
             }
         }
 
