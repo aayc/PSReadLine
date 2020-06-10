@@ -12,7 +12,7 @@ namespace Microsoft.PowerShell
     public partial class PSConsoleReadLine
     {
         const char commandSplitTokens = '|';
-        const string serviceUri = "http://localhost:3000/azpredict";
+        const string serviceUri = "http://localhost:3000/azpredict"; // TODO use real service URI
         HttpClient client = new HttpClient();
         List<string> suggestions = new List<string>();
         List<string> commands = new List<string>();
