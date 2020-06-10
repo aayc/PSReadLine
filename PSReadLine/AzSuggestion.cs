@@ -28,6 +28,73 @@ namespace Microsoft.PowerShell
         bool waitForPredictions = true;
         bool waitForCommands = true;
 
+        public string GetAzSuggestion(string line)
+        {
+            var segments = line.Split(commandSplitTokens);
+            var lastSegment = segments.Last();
+            var leadingSpaces = lastSegment.Length - lastSegment.TrimStart().Length;
+            var text = lastSegment.TrimStart();
+            string suggestion = null;
+            if (!waitForPredictions)
+            {
+                suggestion = suggestions.FirstOrDefault(option => option.StartsWith(text, Options.HistoryStringComparison));
+            }
+
+            if (!waitForCommands && suggestion == null)
+            {
+                suggestion = commands
+                    .FirstOrDefault(command => command.StartsWith(text, Options.HistoryStringComparison));
+            }
+
+            if (suggestion != null)
+            {
+                segments[segments.Length - 1] = new string(' ', leadingSpaces) + suggestion;
+                return String.Join("" + commandSplitTokens, segments);
+            }
+            else
+            {
+                return suggestion;
+            }
+        }
+
+        public void LogAzSuggestionTelemetry(string submitted)
+        {
+            var log = new Dictionary<string, string>();
+            var usedHistory = false;
+            var usedSuggestion = false;
+
+            // Take just the first command
+            submitted = azCmdletRegex.Match(submitted).Value;
+            log["submitted"] = submitted;
+            log["history"] = ProcessHistory();
+            log["suggestions"] = String.Join(Environment.NewLine, suggestions);
+
+            if (suggestions.Any(suggestion => submitted.Equals(suggestion, Options.HistoryStringComparison)))
+            {
+                usedSuggestion = true;
+            }
+            else
+            {
+                for (int index = _history.Count - 1; index > 0; index--)
+                {
+                    var line = _history[index].CommandLine;
+                    if (line.Equals(submitted, Options.HistoryStringComparison))
+                    {
+                        usedHistory = true;
+                        break;
+                    }
+                }
+            }
+            log["usedSuggestion"] = usedSuggestion.ToString();
+            log["usedHistory"] = usedHistory.ToString();
+            logs.Add(log);
+
+            if (logs.Count % 10 == 0)
+            {
+                Debug.WriteLine("TODO: aggregate and write logs");
+            }
+        }
+
         public void RequestPredictions()
         {
             if (waitForCommands) return;
@@ -70,72 +137,6 @@ namespace Microsoft.PowerShell
                 });
         }
 
-        public void LogAzSuggestionTelemetry(string submitted)
-        {
-            var log = new Dictionary<string, string>();
-            var usedHistory = false;
-            var usedSuggestion = false;
-
-            // Take just the first command
-            submitted = azCmdletRegex.Match(submitted).Value;
-            log["submitted"] = submitted;
-            log["history"] = ProcessHistory();
-            log["suggestions"] = String.Join(Environment.NewLine, suggestions);
-
-            if (suggestions.Any(suggestion => submitted.Equals(suggestion, Options.HistoryStringComparison)))
-            {
-                usedSuggestion = true;
-            }
-            else
-            {
-                for (int index = _history.Count - 1; index > 0; index--)
-                {
-                    var line = _history[index].CommandLine;
-                    if (line.Equals(submitted, Options.HistoryStringComparison))
-                    {
-                        usedHistory = true;
-                        break;
-                    }
-                }
-            }
-            log["usedSuggestion"] = usedSuggestion.ToString();
-            log["usedHistory"] = usedHistory.ToString();
-            logs.Add(log);
-
-            if (logs.Count % 10 == 0)
-            {
-                Debug.WriteLine("TODO: aggregate and write logs");
-            }
-        }
-
-        public string GetAzSuggestion(string line)
-        {
-            var segments = line.Split(commandSplitTokens);
-            var lastSegment = segments.Last();
-            var leadingSpaces = lastSegment.Length - lastSegment.TrimStart().Length;
-            var text = lastSegment.TrimStart();
-            string suggestion = null;
-            if (!waitForPredictions)
-            {
-                suggestion = suggestions.FirstOrDefault(option => option.StartsWith(text, Options.HistoryStringComparison));
-            }
-
-            if (!waitForCommands && suggestion == null)
-            {
-                suggestion = commands
-                    .FirstOrDefault(command => command.StartsWith(text, Options.HistoryStringComparison));
-            }
-
-            if (suggestion != null)
-            {
-                segments[segments.Length - 1] = new string(' ', leadingSpaces) + suggestion;
-                return String.Join("" + commandSplitTokens, segments);
-            }
-            else
-            {
-                return suggestion;
-            }
-        }
         private string ProcessHistory()
         {
             var previousLines = new List<string>(nHistoryLines);
