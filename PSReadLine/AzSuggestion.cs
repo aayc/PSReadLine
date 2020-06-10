@@ -2,21 +2,17 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.IO;
 using System.Linq;
 using System.Net.Http;
-using System.Net.Http.Headers;
-using System.Net.NetworkInformation;
 using System.Runtime.InteropServices;
 using System.Text;
-using System.Threading;
-using System.Threading.Tasks;
 
 namespace Microsoft.PowerShell
 {
     public partial class PSConsoleReadLine
     {
         const char commandSplitTokens = '|';
+        const string serviceUri = "http://localhost:3000/azpredict";
         HttpClient client = new HttpClient();
         List<string> suggestions = new List<string>();
         List<string> commands = new List<string>();
@@ -135,13 +131,11 @@ namespace Microsoft.PowerShell
             string historySnippet = ProcessHistory();
             string requestBody = JsonConvert.SerializeObject(new Dictionary<string, string> { { "history", historySnippet } });
             client
-                .PostAsync("http://localhost:3000/azpredict", new StringContent(requestBody, Encoding.UTF8, "application/json"))
+                .PostAsync(serviceUri, new StringContent(requestBody, Encoding.UTF8, "application/json"))
                 .ContinueWith(async (requestTask) => {
                     string reply = await requestTask.Result.Content.ReadAsStringAsync();
                     suggestions = JsonConvert.DeserializeObject<List<string>>(reply);
                     waitForPredictions = false;
-                    Debug.WriteLine("history snippet: " + historySnippet);
-                    Debug.WriteLine("Service reply: " + reply);
                 });
         }
 
@@ -149,7 +143,7 @@ namespace Microsoft.PowerShell
         {
             waitForCommands = true;
             client
-                .GetAsync("http://localhost:3000/azpredict")
+                .GetAsync(serviceUri)
                 .ContinueWith(async (requestTask) => {
                     string reply = await requestTask.Result.Content.ReadAsStringAsync();
                     commands = JsonConvert.DeserializeObject<List<string>>(reply);
@@ -161,7 +155,7 @@ namespace Microsoft.PowerShell
 
         void LogAzSuggestionTelemetry(string submitted)
         {
-            Dictionary<string, string> log = new Dictionary<string, string>();
+            var log = new Dictionary<string, string>();
             bool usedHistory = false;
             bool usedSuggestion = false;
 
@@ -189,21 +183,20 @@ namespace Microsoft.PowerShell
             }
             log["usedSuggestion"] = usedSuggestion.ToString();
             log["usedHistory"] = usedHistory.ToString();
-            //Debug.WriteLine(string.Join(Environment.NewLine, log));
             logs.Add(log);
 
             if (logs.Count % 10 == 0)
             {
-                Debug.WriteLine("todo: write logs");
+                Debug.WriteLine("TODO: write logs");
             }
         }
 
         string GetAzSuggestion(string line)
         {
-            string[] segments = line.Split(commandSplitTokens);
-            string lastSegment = segments.Last();
-            int leadingSpaces = lastSegment.Length - lastSegment.TrimStart().Length;
-            string text = lastSegment.TrimStart();
+            var segments = line.Split(commandSplitTokens);
+            var lastSegment = segments.Last();
+            var leadingSpaces = lastSegment.Length - lastSegment.TrimStart().Length;
+            var text = lastSegment.TrimStart();
             string suggestion = null;
             if (!waitForPredictions)
             {
@@ -212,7 +205,6 @@ namespace Microsoft.PowerShell
 
             if (!waitForCommands && suggestion == null)
             {
-                //Debug.WriteLine("Falling back on command by frequency");
                 suggestion = commands
                     .FirstOrDefault(command => command.StartsWith(text, Options.HistoryStringComparison));
             }
