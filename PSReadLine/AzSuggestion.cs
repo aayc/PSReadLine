@@ -15,9 +15,9 @@ namespace Microsoft.PowerShell
 {
     public partial class PSConsoleReadLine
     {
-        private const char commandSplitTokens = '|';
         private const int nHistoryLines = 2;
-        private const string serviceUri = "https://localhost:44386/api/v1/prediction";
+        private const string serviceUri = "https://localhost:3000";
+        private Regex lineSplitRegex = new Regex(@"([|=])|(&&)");
         private Regex azCmdletRegex = new Regex(@"\b\w+-Az\w+\b", RegexOptions.IgnoreCase);
         private HttpClient client = new HttpClient();
         private List<string> suggestions = new List<string>();
@@ -30,7 +30,7 @@ namespace Microsoft.PowerShell
 
         public string GetAzSuggestion(string line)
         {
-            var segments = line.Split(commandSplitTokens);
+            var segments = lineSplitRegex.Split(line);
             var lastSegment = segments.Last();
             var leadingSpaces = lastSegment.Length - lastSegment.TrimStart().Length;
             var text = lastSegment.TrimStart();
@@ -49,7 +49,7 @@ namespace Microsoft.PowerShell
             if (suggestion != null)
             {
                 segments[segments.Length - 1] = new string(' ', leadingSpaces) + suggestion;
-                return String.Join("" + commandSplitTokens, segments);
+                return String.Join("", segments);
             }
             else
             {
@@ -113,7 +113,7 @@ namespace Microsoft.PowerShell
                 }}
             });
             client
-                .PostAsync(serviceUri, new StringContent(requestBody, Encoding.UTF8, "application/json"))
+                .PostAsync(serviceUri + "/prediction", new StringContent(requestBody, Encoding.UTF8, "application/json"))
                 .ContinueWith(async (requestTask) =>
                 {
                     var reply = await requestTask.Result.Content.ReadAsStringAsync();
@@ -126,7 +126,7 @@ namespace Microsoft.PowerShell
         {
             waitForCommands = true;
             client
-                .GetAsync(serviceUri)
+                .GetAsync(serviceUri + "/commands")
                 .ContinueWith(async (requestTask) =>
                 {
                     var reply = await requestTask.Result.Content.ReadAsStringAsync();
