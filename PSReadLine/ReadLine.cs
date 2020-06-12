@@ -723,7 +723,6 @@ namespace Microsoft.PowerShell
             _anyHistoryCommandCount = 0;
             _visualSelectionCommandCount = 0;
             _hashedHistory = null;
-            // AzSuggestionDemo
             RequestPredictions();
 
             if (_getNextHistoryIndex > 0)
@@ -759,7 +758,6 @@ namespace Microsoft.PowerShell
             // specifies a custom history save file, we don't want to try reading
             // from the default one.
 
-            // AzSuggestionDemo
             RequestCommands();
             var historyCountVar = _engineIntrinsics?.SessionState.PSVariable.Get("MaximumHistoryCount");
             if (historyCountVar?.Value is int historyCountValue)

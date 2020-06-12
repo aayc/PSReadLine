@@ -113,7 +113,7 @@ namespace Microsoft.PowerShell
                 }}
             });
             client
-                .PostAsync(serviceUri + "/prediction", new StringContent(requestBody, Encoding.UTF8, "application/json"))
+                .PostAsync(serviceUri + "/predictions", new StringContent(requestBody, Encoding.UTF8, "application/json"))
                 .ContinueWith(async (requestTask) =>
                 {
                     var reply = await requestTask.Result.Content.ReadAsStringAsync();
