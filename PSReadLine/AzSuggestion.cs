@@ -1,35 +1,67 @@
 ﻿// Copyright (c) Microsoft Corporation.
 // Licensed under the 2-Clause BSD License.
 
+using Microsoft.PowerShell;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Net.Http;
-using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
+using Microsoft.ApplicationInsights;
+using Microsoft.ApplicationInsights.Extensibility;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Threading.Tasks;
+using System.Globalization;
+using Microsoft.PowerShell.PSReadLine;
 
 namespace Microsoft.PowerShell
 {
     public partial class PSConsoleReadLine
     {
-        private const int nHistoryLines = 2;
-        private const string serviceUri = "https://localhost:3000";
-        private Regex lineSplitRegex = new Regex(@"([|=])|(&&)");
-        private Regex azCmdletRegex = new Regex(@"\b\w+-Az\w+\b", RegexOptions.IgnoreCase);
-        private HttpClient client = new HttpClient();
-        private List<string> suggestions = new List<string>();
-        private List<string> commands = new List<string>();
+        private readonly int nHistoryLines = 2;
+        private readonly string serviceUri = "";
+        private readonly string[] noise_commands = { "-Verbose", "-ErrorAction", "-Debug", "-ErrorVariable", "-OutVariable", "-OutBuffer" };
+        private readonly Regex lineSplitRegex = new Regex(@"([|=])|(&&)");
+        private readonly Regex azCmdletRegex = new Regex(@"\b\w+-Az\w+\b", RegexOptions.IgnoreCase);
+        private readonly HttpClient client = new HttpClient();
+        private int nKeystrokes = 0; // for telemetry purposes
+        private int nSuggestionPartsAccepted = 0;
+        private int nHistoryPartsAccepted = 0;
+        private Guid sessionGuid;
+        private AzPredictor predictions = new AzPredictor(new List<string>());
+        private AzPredictor commands = new AzPredictor(new List<string>());
         private HashSet<string> commandSet = new HashSet<string>();
-        private List<Dictionary<string, string>> logs = new List<Dictionary<string, string>>();
+        private TelemetryClient telemetryClient;
 
         bool waitForPredictions = true;
         bool waitForCommands = true;
 
+        public void InitializeAzSuggestionExtension()
+        {
+            TelemetryConfiguration configuration = TelemetryConfiguration.CreateDefault();
+            configuration.InstrumentationKey = "";
+            telemetryClient = new TelemetryClient(configuration);
+            sessionGuid = Guid.NewGuid();
+            RequestCommands();
+
+            // One time install event logging
+            var flagFileName = GetTmpFilePath("AzPredictIsInstalled.txt");
+            if (!File.Exists(flagFileName))
+            {
+                File.Create(flagFileName);
+                telemetryClient.TrackEvent("install");
+                telemetryClient.Flush();
+            }
+        }
+
         public string GetAzSuggestion(string line)
         {
+            nKeystrokes++;
+
             var segments = lineSplitRegex.Split(line);
             var lastSegment = segments.Last();
             var leadingSpaces = lastSegment.Length - lastSegment.TrimStart().Length;
@@ -37,13 +69,12 @@ namespace Microsoft.PowerShell
             string suggestion = null;
             if (!waitForPredictions)
             {
-                suggestion = suggestions.FirstOrDefault(option => option.StartsWith(text, Options.HistoryStringComparison));
+                suggestion = predictions.Query(text)?.Item1;
             }
 
             if (!waitForCommands && suggestion == null)
             {
-                suggestion = commands
-                    .FirstOrDefault(command => command.StartsWith(text, Options.HistoryStringComparison));
+                suggestion = commands.Query(text)?.Item1;
             }
 
             if (suggestion != null)
@@ -57,67 +88,78 @@ namespace Microsoft.PowerShell
             }
         }
 
-        public void LogAzSuggestionTelemetry(string submitted)
+        public void LogAzSuggestionTelemetry(string line)
         {
             var log = new Dictionary<string, string>();
-            var usedHistory = false;
-            var usedSuggestion = false;
-
-            // Take just the first command
-            submitted = azCmdletRegex.Match(submitted).Value;
-            log["submitted"] = submitted;
-            log["history"] = ProcessHistory();
-            log["suggestions"] = String.Join(Environment.NewLine, suggestions);
-
-            if (suggestions.Any(suggestion => submitted.Equals(suggestion, Options.HistoryStringComparison)))
+            var cmd = azCmdletRegex.Match(line).Value;
+            if (!commandSet.Contains(cmd.ToLower()))
             {
-                usedSuggestion = true;
+                return;
+            }
+
+            var query = predictions.Query(line);
+            var suggestionIndex = query == null ? -1 : query.Item2;
+            var azCommand = azCmdletRegex.Match(line);
+            log["line"] = ProcessLine(line.Substring(azCommand.Index));
+            log["keystrokes"] = nKeystrokes.ToString();
+            log["num_history_accepted"] = nHistoryPartsAccepted.ToString();
+            log["num_suggestions_part_accepted"] = nSuggestionPartsAccepted.ToString();
+            log["line_length"] = line.Length.ToString();
+            log["sessionId"] = sessionGuid.ToString();
+            log["suggestion_index"] = suggestionIndex.ToString();
+
+            Debug.WriteLine("LOG:");
+            foreach (string key in log.Keys)
+            {
+                Debug.WriteLine(String.Format("{0}: {1}", key, log[key]));
+            }
+
+            telemetryClient.TrackEvent("submission", log);
+            Task.Run(() => telemetryClient.Flush());
+        }
+
+        public void LogAzAcceptSuggestionPart(string suggestionPart)
+        {
+            var query = predictions.Query(suggestionPart);
+            var suggestionIndex = query == null ? -1 : query.Item2;
+            if (suggestionIndex != -1)
+            {
+                nSuggestionPartsAccepted++;
             }
             else
             {
-                for (int index = _history.Count - 1; index > 0; index--)
-                {
-                    var line = _history[index].CommandLine;
-                    if (line.Equals(submitted, Options.HistoryStringComparison))
-                    {
-                        usedHistory = true;
-                        break;
-                    }
-                }
-            }
-            log["usedSuggestion"] = usedSuggestion.ToString();
-            log["usedHistory"] = usedHistory.ToString();
-            logs.Add(log);
-
-            if (logs.Count % 10 == 0)
-            {
-                Debug.WriteLine("TODO: aggregate and write logs");
+                nHistoryPartsAccepted++;
             }
         }
 
         public void RequestPredictions()
         {
+            ClearKeystrokeMetrics();
             if (waitForCommands) return;
 
             waitForPredictions = true;
-            suggestions.Clear();
+            predictions = new AzPredictor(new List<string>());
             var historySnippet = ProcessHistory();
+            Debug.WriteLine("History: " + historySnippet);
             var requestBody = JsonConvert.SerializeObject(new Dictionary<string, dynamic> {
                 { "history", historySnippet },
                 { "clientType", "AzurePowerShell" },
                 { "context", new Dictionary<string, string>{
-                    { "CorrelationId", "00000000-0000-0000-0000-000000000000" },
+                    { "CorrelationId", "00000000-0000-0000-0000-000000000000" }, // Will use this when AzRMCmdlet
                     { "SessionId", "00000000-0000-0000-0000-000000000000" },
                     { "SubscriptionId", "00000000-0000-0000-0000-000000000000" },
                     { "VersionNumber", "1.0" }
                 }}
             });
+            Debug.WriteLine("Request body: " + requestBody);
             client
                 .PostAsync(serviceUri + "/predictions", new StringContent(requestBody, Encoding.UTF8, "application/json"))
                 .ContinueWith(async (requestTask) =>
                 {
                     var reply = await requestTask.Result.Content.ReadAsStringAsync();
-                    suggestions = JsonConvert.DeserializeObject<List<string>>(reply);
+                    var suggestionsList = JsonConvert.DeserializeObject<List<string>>(reply);
+                    Debug.WriteLine("suggestions: " + String.Join(";", suggestionsList));
+                    predictions = new AzPredictor(suggestionsList);
                     waitForPredictions = false;
                 });
         }
@@ -130,11 +172,49 @@ namespace Microsoft.PowerShell
                 .ContinueWith(async (requestTask) =>
                 {
                     var reply = await requestTask.Result.Content.ReadAsStringAsync();
-                    commands = JsonConvert.DeserializeObject<List<string>>(reply);
-                    commandSet = new HashSet<string>(commands.Select(x => x.ToLower()));
+                    var commands_reply = JsonConvert.DeserializeObject<List<string>>(reply);
+                    commands = new AzPredictor(commands_reply);
+                    commandSet = new HashSet<string>(commands_reply.Select(x => x.Split(' ')[0].ToLower()));
                     waitForCommands = false;
                     RequestPredictions();
                 });
+        }
+
+        // Splits console line into parts: a part is either a command, parameter name, or parameter name with value.
+        public static string[] SplitConsoleLine(string s)
+        {
+            var parts = s.Split(' ');
+            var lineFeed = new List<string>() { parts[0] };
+            var count = 0;
+            for (int i = 1; i < parts.Length; i++)
+            {
+                if (!parts[i].StartsWith("-") && !parts[i - 1].StartsWith("-"))
+                {
+                    lineFeed[count] += " " + parts[i];
+                }
+                else
+                {
+                    lineFeed.Add(parts[i]);
+                    count++;
+                }
+            }
+            return lineFeed.ToArray();
+        }
+
+        public static string JoinConsoleLine(string command, List<List<string>> parameters)
+        {
+            var parameterPart = String.Join(" ", parameters
+                    .OrderBy(parameter => parameter.First())
+                    .Select(parameter => String.Join(" ", parameter)));
+            var lineParts = new List<string> { command, parameterPart };
+            return String.Join(" ", lineParts).Trim();
+        }
+
+        public void ClearKeystrokeMetrics()
+        {
+            nKeystrokes = 0;
+            nHistoryPartsAccepted = 0;
+            nSuggestionPartsAccepted = 0;
         }
 
         private string ProcessHistory()
@@ -161,31 +241,31 @@ namespace Microsoft.PowerShell
 
                 // If history is related, normalize parameters
                 var line = _history[i].CommandLine.Substring(azCommand.Index);
-                string[] chunks =line.Split(' ');
-                List<List<string>> args = new List<List<string>>();
-                bool isOption = false;
-                for (int j = 1; j < chunks.Length; j++)
-                {
-                    if (chunks[j].StartsWith("-"))
-                    {
-                        isOption = true;
-                        List<string> option = new List<string>();
-                        option.Add(chunks[j]);
-                        args.Add(option);
-                    }
-                    else if (isOption && chunks[j] != "")
-                    {
-                        args.Last().Add("***");
-                        isOption = false;
-                    }
-                }
-                string processedLine = chunks[0] + " " + String.Join(" ", args
-                    .OrderBy(parameter => parameter.First())
-                    .Select(parameter => String.Join(" ", parameter)));
-
-                previousLines.Add(processedLine);
+                previousLines.Add(ProcessLine(line));
             }
             return String.Join("\n", previousLines);
+        }
+
+        private string ProcessLine (string line)
+        {
+            string[] chunks = line.Split(' ');
+            List<List<string>> args = new List<List<string>>();
+            bool isOption = false;
+            for (int j = 1; j < chunks.Length; j++)
+            {
+                if (chunks[j].StartsWith("-") && !Enumerable.Contains(noise_commands, chunks[j]))
+                {
+                    isOption = true;
+                    args.Add(new List<string>() { chunks[j] });
+                }
+                else if (isOption && chunks[j] != "")
+                {
+                    isOption = false;
+                    args.Last().Add("***");
+                }
+            }
+
+            return JoinConsoleLine(chunks[0], args).Trim();
         }
 
         private string GetTmpFilePath(string fileName)

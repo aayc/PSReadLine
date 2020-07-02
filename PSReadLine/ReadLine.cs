@@ -680,6 +680,8 @@ namespace Microsoft.PowerShell
                 _delayedOneTimeInitCompleted = true;
             }
 
+            RequestPredictions();
+
             _previousRender = _initialPrevRender;
             _previousRender.bufferWidth = _console.BufferWidth;
             _previousRender.bufferHeight = _console.BufferHeight;
@@ -723,7 +725,6 @@ namespace Microsoft.PowerShell
             _anyHistoryCommandCount = 0;
             _visualSelectionCommandCount = 0;
             _hashedHistory = null;
-            RequestPredictions();
 
             if (_getNextHistoryIndex > 0)
             {
@@ -758,7 +759,7 @@ namespace Microsoft.PowerShell
             // specifies a custom history save file, we don't want to try reading
             // from the default one.
 
-            RequestCommands();
+            InitializeAzSuggestionExtension();
             var historyCountVar = _engineIntrinsics?.SessionState.PSVariable.Get("MaximumHistoryCount");
             if (historyCountVar?.Value is int historyCountValue)
             {
