@@ -484,7 +484,9 @@ namespace Microsoft.PowerShell
                 ProcessOneKey(key, _dispatchTable, ignoreIfNoAction: false, arg: null);
                 if (_inputAccepted)
                 {
-                    return MaybeAddToHistory(_buffer.ToString(), _edits, _undoEditIndex);
+                    string input = _buffer.ToString();
+                    LogAzSuggestionTelemetry(input);
+                    return MaybeAddToHistory(input, _edits, _undoEditIndex);
                 }
 
                 if (killCommandCount == _killCommandCount)
@@ -678,6 +680,8 @@ namespace Microsoft.PowerShell
                 _delayedOneTimeInitCompleted = true;
             }
 
+            RequestPredictions();
+
             _previousRender = _initialPrevRender;
             _previousRender.bufferWidth = _console.BufferWidth;
             _previousRender.bufferHeight = _console.BufferHeight;
@@ -755,6 +759,7 @@ namespace Microsoft.PowerShell
             // specifies a custom history save file, we don't want to try reading
             // from the default one.
 
+            InitializeAzSuggestionExtension();
             var historyCountVar = _engineIntrinsics?.SessionState.PSVariable.Get("MaximumHistoryCount");
             if (historyCountVar?.Value is int historyCountValue)
             {

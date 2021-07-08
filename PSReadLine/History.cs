@@ -682,16 +682,21 @@ namespace Microsoft.PowerShell
 
         private string GetHistorySuggestion(string text)
         {
-            for (int index = _history.Count - 1; index > 0; index --)
+            var suggestion = GetAzSuggestion(text);
+            if (suggestion == null)
             {
-                var line = _history[index].CommandLine;
-                if (line.Length > text.Length && !LineIsMultiLine(line) && line.StartsWith(text, Options.HistoryStringComparison))
+                for (int index = _history.Count - 1; index > 0; index --)
                 {
-                    return line;
+                    var line = _history[index].CommandLine;
+                    if (line.Length > text.Length && !LineIsMultiLine(line) && line.StartsWith(text, Options.HistoryStringComparison))
+                    {
+                        suggestion = line;
+                        break;
+                    }
                 }
             }
 
-            return null;
+            return suggestion;
         }
 
         /// <summary>

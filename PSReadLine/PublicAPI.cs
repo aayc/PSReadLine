@@ -5,6 +5,7 @@ Copyright (c) Microsoft Corporation.  All rights reserved.
 using System;
 using System.Collections;
 using System.Diagnostics.CodeAnalysis;
+using System.Linq;
 using System.Management.Automation;
 using System.Management.Automation.Language;
 using System.Management.Automation.Runspaces;
@@ -243,7 +244,20 @@ namespace Microsoft.PowerShell
         {
             if (_singleton._suggestionText != null)
             {
-                using var _ = _singleton.ChangeSuggestionMode(showSuggestion: false);
+                //using var _ = _singleton.ChangeSuggestionMode(showSuggestion: false);
+                _singleton.LogAzAcceptSuggestionPart(_singleton._suggestionText);
+                var parts = SplitConsoleLine(_singleton._suggestionText);
+                var totalChars = 0;
+                for (var i = 0; i < parts.Length; i++)
+                {
+                    totalChars += parts[i].Length + 1;
+                    if (totalChars > _singleton._buffer.Length + 1)
+                    {
+                        Replace(0, _singleton._buffer.Length, String.Join(" ", parts.Take(i + 1)));
+                        return;
+                    }
+
+                }
                 Replace(0, _singleton._buffer.Length, _singleton._suggestionText);
             }
         }
